@@ -46,11 +46,12 @@ const MOD_CHAT_IDS = env('MODERATED_CHAT_IDS')
   .filter(Boolean);
 
 // Default referral links are the official sites (placeholders). Change them from /settings.
+// kind = what the user submits on that platform: 'uid' or 'wallet'
 const PLATFORMS = [
-  { key: 'blofin', name: 'BloFin', defaultRef: 'https://blofin.com' },
-  { key: 'txflow', name: 'Txflow', defaultRef: 'https://txflow.com' },
-  { key: 'bybit', name: 'Bybit', defaultRef: 'https://www.bybit.com' },
-  { key: 'okx', name: 'OKX', defaultRef: 'https://www.okx.com' },
+  { key: 'blofin', name: 'BloFin', kind: 'uid', defaultRef: 'https://blofin.com' },
+  { key: 'txflow', name: 'Txflow', kind: 'wallet', defaultRef: 'https://txflow.com' },
+  { key: 'bybit', name: 'Bybit', kind: 'uid', defaultRef: 'https://www.bybit.com' },
+  { key: 'okx', name: 'OKX', kind: 'uid', defaultRef: 'https://www.okx.com' },
 ];
 const P = Object.fromEntries(PLATFORMS.map((p) => [p.key, p]));
 
@@ -60,11 +61,9 @@ const DEFAULT_MSG = {
   welcome:
     '🛡️ **WELCOME TO VIGIL ACCESS**\n\nUnlock access to **The Vigil VIP Trading Community** and get exclusive market insights, trading indicators, and analysis.\n\n🔑 **How to Get VIP Access**\n\n1️⃣ **Choose Your Platform** from the options below.\n\n2️⃣ **Register Using Our Link** for your selected platform.\n\n3️⃣ Submit your **UID** (or **Wallet Address for TxFlow**) for verification.\n\n4️⃣ **Get Verified** and receive your private VIP invite link.\n\n👇 **Select your preferred platform below to get started.**',
   submitted:
-    'Thank you. Your {platform} details have been submitted for review.\n\nYou will receive a message here as soon as a decision is made.',
-  approved:
-    'You are approved for {platform}.\n\nTap the button below to join the VIP channel. This link works for one person only and expires after you join, or in {minutes} minutes.',
-  rejected:
-    'Sorry, you are rejected. Your {platform} request was not approved.\n\nIf you believe this is a mistake, please contact the team.',
+    "✅ **{item} Submitted Successfully!**\nYour {item} is under review. We'll notify you once it's approved.",
+  approved: "🎉 **You're Approved!**\nTap below to join.\n🔗 {link}",
+  rejected: '❌ **Request Declined**\nFor assistance, contact our support team:\n@vigil_intern',
 };
 
 const MSG_LABELS = {
@@ -276,10 +275,12 @@ async function deliverInvite(userId, pk) {
         .select()
     );
 
-    await bot.telegram.sendMessage(userId, esc(getMsg('approved', { platform: p.name, minutes: ttl })), {
-      parse_mode: 'HTML',
-      ...Markup.inlineKeyboard([[Markup.button.url(`Join ${p.name} VIP channel`, invite.invite_link)]]),
-    });
+    // Invite link is sent as plain text inside the message (no button)
+    await bot.telegram.sendMessage(
+      userId,
+      boldify(getMsg('approved', { platform: p.name, minutes: ttl, link: invite.invite_link })),
+      { parse_mode: 'HTML' }
+    );
     return true;
   } catch (e) {
     console.error('[invite] failed:', e);
@@ -409,7 +410,7 @@ bot.action(/^(ac|rj):(\d+)$/, async (ctx) => {
     notified = await deliverInvite(row.telegram_id, row.platform);
   } else {
     notified = await bot.telegram
-      .sendMessage(row.telegram_id, esc(getMsg('rejected', { platform: P[row.platform].name })), { parse_mode: 'HTML' })
+      .sendMessage(row.telegram_id, boldify(getMsg('rejected', { platform: P[row.platform].name })), { parse_mode: 'HTML' })
       .then(() => true)
       .catch(() => false);
   }
@@ -457,6 +458,21 @@ async function showHome(ctx) {
 function platformText(pk) {
   const p = P[pk];
   const ref = getRef(pk);
+
+  // BloFin, Bybit, OKX: short page, UID only
+  if (p.kind === 'uid') {
+    const link = ref
+      ? `<a href="${esc(ref)}"><b>Sign Up on ${esc(p.name)}</b></a>`
+      : 'The sign-up link will be shared soon.';
+    return (
+      `🔷 <b>${esc(p.name)}</b>\n\n` +
+      `<b>Step 1:</b> Create your account using our referral link.\n\n` +
+      `🔗 ${link}\n\n` +
+      `<b>Step 2:</b> Submit your <b>${esc(p.name)} UID</b> using the button below.`
+    );
+  }
+
+  // Txflow: wallet address (its own message will be added later)
   const link = ref ? `<a href="${esc(ref)}">Sign up on ${esc(p.name)}</a>` : 'The sign-up link will be shared soon.';
   const steps = getSteps(pk)
     .split('\n')
@@ -468,7 +484,7 @@ function platformText(pk) {
     `<b>${esc(p.name)}</b>\n\n` +
     `<b>Step 1.</b> Create your account with our link:\n${link}\n\n` +
     (steps ? `<b>Step 2.</b>\n${steps}\n\n` : '') +
-    `<b>Step 3.</b> Submit your UID or wallet address using the buttons below.\n\n` +
+    `<b>Step 3.</b> Submit your wallet address using the button below.\n\n` +
     `<i>Never share passwords, OTP codes, seed phrases or private keys.</i>`
   );
 }
@@ -549,14 +565,13 @@ bot.action(/^pf:(\w+)$/, async (ctx) => {
     );
   }
 
-  await show(
-    ctx,
-    platformText(pk),
-    Markup.inlineKeyboard([
-      [Markup.button.callback('Enter UID', `in:${pk}:uid`), Markup.button.callback('Enter wallet address', `in:${pk}:wallet`)],
-      [Markup.button.callback('Back', 'home')],
-    ])
-  );
+  // UID platforms show only "Enter UID"; Txflow shows only "Enter wallet address"
+  const enterButton =
+    p.kind === 'uid'
+      ? Markup.button.callback('Enter UID', `in:${pk}:uid`)
+      : Markup.button.callback('Enter wallet address', `in:${pk}:wallet`);
+
+  await show(ctx, platformText(pk), Markup.inlineKeyboard([[enterButton], [Markup.button.callback('Back', 'home')]]));
 });
 
 bot.action(/^lk:(\w+)$/, async (ctx) => {
@@ -574,7 +589,7 @@ bot.action(/^in:(\w+):(uid|wallet)$/, async (ctx) => {
   if (ctx.chat?.type !== 'private') return;
   const [, pk, kind] = ctx.match;
   const p = P[pk];
-  if (!p) return;
+  if (!p || p.kind !== kind) return; // each platform accepts only its own type
   await setState(ctx.from.id, `input:${pk}:${kind}`);
   const prompt =
     kind === 'uid'
@@ -676,10 +691,13 @@ async function handleInput(ctx, pk, kind) {
   }
 
   await setState(ctx.from.id, 'idle');
-  await ctx.reply(esc(getMsg('submitted', { platform: p.name })), {
-    parse_mode: 'HTML',
-    ...Markup.inlineKeyboard([[Markup.button.callback('Back to menu', 'home')]]),
-  });
+  await ctx.reply(
+    boldify(getMsg('submitted', { platform: p.name, item: kind === 'uid' ? 'UID' : 'Wallet Address' })),
+    {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([[Markup.button.callback('Back to menu', 'home')]]),
+    }
+  );
 }
 
 /* =============================================================
@@ -770,7 +788,7 @@ bot.action(
     if (arg === 'ms') {
       const rows = Object.keys(DEFAULT_MSG).map((k) => [Markup.button.callback(MSG_LABELS[k], `se:msg:${k}`)]);
       rows.push([back('st:home')]);
-      return show(ctx, '<b>Messages</b>\n\nChoose a message to edit. You can use {platform} and {minutes} inside messages. In the welcome message, put **text** between double stars to make it bold.', Markup.inlineKeyboard(rows));
+      return show(ctx, '<b>Messages</b>\n\nChoose a message to edit. You can use {platform}, {item} (submitted message), {link} and {minutes} (approved message) inside messages. Put **text** between double stars to make it bold.', Markup.inlineKeyboard(rows));
     }
 
     if (arg === 'ln') {
@@ -1306,7 +1324,9 @@ bot.on('text', async (ctx) => {
 
   if (state.startsWith('input:')) {
     const [, pk, kind] = state.split(':');
-    if (P[pk] && (kind === 'uid' || kind === 'wallet')) return handleInput(ctx, pk, kind);
+    if (P[pk] && P[pk].kind === kind) return handleInput(ctx, pk, kind);
+    await setState(ctx.from.id, 'idle'); // stale state, reset it
+    return;
   }
   if (state.startsWith('edit:')) return handleEdit(ctx, state.slice(5));
 });
