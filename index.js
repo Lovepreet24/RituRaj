@@ -48,9 +48,9 @@ const MOD_CHAT_IDS = env('MODERATED_CHAT_IDS')
 // Default referral links are the official sites (placeholders). Change them from /settings.
 // kind = what the user submits on that platform: 'uid' or 'wallet'
 const PLATFORMS = [
-  { key: 'blofin', name: 'BloFin', kind: 'uid', defaultRef: 'https://blofin.com' },
-  { key: 'txflow', name: 'Txflow', kind: 'wallet', defaultRef: 'https://txflow.com' },
-  { key: 'bybit', name: 'Bybit', kind: 'uid', defaultRef: 'https://www.bybit.com' },
+  { key: 'blofin', name: 'BloFin', kind: 'uid', defaultRef: 'https://partner.blofin.com/d/THEVIGIL20' },
+  { key: 'txflow', name: 'Txflow', kind: 'wallet', defaultRef: 'https://app.txflow.com/r/TXVIGIL' },
+  { key: 'bybit', name: 'Bybit', kind: 'uid', defaultRef: 'https://partner.bybit.com/b/thevigil' },
   { key: 'okx', name: 'OKX', kind: 'uid', defaultRef: 'https://www.okx.com' },
 ];
 const P = Object.fromEntries(PLATFORMS.map((p) => [p.key, p]));
@@ -480,20 +480,16 @@ function platformText(pk) {
     );
   }
 
-  // Txflow: wallet address (its own message will be added later)
-  const link = ref ? `<a href="${esc(ref)}">Sign up on ${esc(p.name)}</a>` : 'The sign-up link will be shared soon.';
-  const steps = getSteps(pk)
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => `• ${esc(s)}`)
-    .join('\n');
+  // Txflow: wallet address
+  const title = 'TxFlow';
+  const link = ref
+    ? `<a href="${esc(ref)}"><b>Sign Up on ${title}</b></a>`
+    : 'The sign-up link will be shared soon.';
   return (
-    `<b>${esc(p.name)}</b>\n\n` +
-    `<b>Step 1.</b> Create your account with our link:\n${link}\n\n` +
-    (steps ? `<b>Step 2.</b>\n${steps}\n\n` : '') +
-    `<b>Step 3.</b> Submit your wallet address using the button below.\n\n` +
-    `<i>Never share passwords, OTP codes, seed phrases or private keys.</i>`
+    `🔷 <b>${title}</b>\n\n` +
+    `<b>Step 1:</b> Register using our referral link.\n\n` +
+    `🔗 ${link}\n\n` +
+    `<b>Step 2:</b> Submit your <b>wallet address</b> using the button below.`
   );
 }
 
