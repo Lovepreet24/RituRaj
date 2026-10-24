@@ -984,6 +984,22 @@ bot.on('channel_post', async (ctx) => {
   await bot.telegram.sendMessage(entry.by, `Approval channel saved: ${ctx.chat.title || ctx.chat.id}`).catch(() => {});
 });
 
+// /bind also works inside a group (only for the owner who asked for the code)
+bot.command('bind', async (ctx) => {
+  if (!['group', 'supergroup'].includes(ctx.chat.type)) return;
+  const code = (ctx.message.text.split(/\s+/)[1] || '').toLowerCase();
+  const entry = bindCodes.get(code);
+  if (!entry || entry.exp < Date.now() || entry.by !== ctx.from.id) return;
+  bindCodes.delete(code);
+
+  await setSetting('approval_channel', String(ctx.chat.id));
+  await ctx.deleteMessage().catch(() => {});
+  await ctx
+    .reply('This group is now the approval chat. New sign-ups will appear here with Accept and Reject buttons.')
+    .catch(() => {});
+  await bot.telegram.sendMessage(entry.by, `Approval chat saved: ${ctx.chat.title || ctx.chat.id}`).catch(() => {});
+});
+
 bot.on('my_chat_member', async (ctx) => {
   const chat = ctx.chat;
   if (!['channel', 'group', 'supergroup'].includes(chat.type)) return;
