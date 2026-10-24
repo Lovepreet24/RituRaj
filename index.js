@@ -100,6 +100,12 @@ async function countRows(table, filter) {
 
 const userLabel = (u) => (u?.username ? `@${u.username}` : u?.first_name || String(u?.telegram_id ?? 'unknown'));
 const stamp = (d) => new Date(d).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+const niceDate = (d) => {
+  const x = new Date(d);
+  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][x.getUTCMonth()];
+  const p = (n) => String(n).padStart(2, '0');
+  return `${x.getUTCDate()} ${mon} ${x.getUTCFullYear()}, ${p(x.getUTCHours())}:${p(x.getUTCMinutes())} UTC`;
+};
 const boldify = (t) => esc(t).replace(/\*\*(.+?)\*\*/gs, '<b>$1</b>');
 const render = (t, vars) => String(t).replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`));
 
@@ -329,18 +335,20 @@ function approvalButtons(id) {
   ]);
 }
 
+const PENDING_STATUS = '⏳ <b>Status: PENDING</b>';
+
 function cardText(row, user, prev, statusHtml) {
   const kindLabel = row.kind === 'uid' ? 'UID' : 'Wallet address';
   return (
-    `<b>New sign-up #${row.id}</b>\n\n` +
-    `Platform: <b>${esc(P[row.platform]?.name || row.platform)}</b>\n` +
-    `${kindLabel}: <code>${esc(row.value)}</code>\n\n` +
-    `User: <a href="tg://user?id=${row.telegram_id}">${esc(user?.first_name || 'User')}</a> (${
-      user?.username ? '@' + esc(user.username) : 'no username'
-    })\n` +
-    `Telegram ID: <code>${row.telegram_id}</code>\n` +
-    `Submitted: ${stamp(row.created_at)}\n` +
-    `Earlier requests: ${prev}\n\n` +
+    `🆕 <b>NEW SIGN-UP #${row.id}</b>\n\n` +
+    `Platform: ${esc(P[row.platform]?.name || row.platform)}\n` +
+    `${kindLabel}: ${esc(row.value)}\n\n` +
+    `👤 <b>User Details</b>\n` +
+    `• Name: ${esc(user?.first_name || 'User')}\n` +
+    `• Username: ${user?.username ? '@' + esc(user.username) : 'none'}\n` +
+    `• Telegram ID: ${row.telegram_id}\n\n` +
+    `📅 <b>Submitted:</b> ${niceDate(row.created_at)}\n` +
+    `🔄 <b>Previous Requests:</b> ${prev}\n\n` +
     statusHtml
   );
 }
@@ -381,9 +389,9 @@ async function refreshCard(row, notified) {
   if (!row.approval_chat_id || !row.approval_message_id) return;
   const user = await getUserRow(row.telegram_id);
   const prev = await prevCount(row);
-  const verdict = row.status === 'approved' ? 'ACCEPTED' : 'REJECTED';
+  const okay = row.status === 'approved';
   const status =
-    `Status: <b>${verdict}</b> by ${esc(row.decided_by_name)}\n${stamp(row.decided_at)}` +
+    `${okay ? '✅' : '❌'} <b>Status: ${okay ? 'ACCEPTED' : 'REJECTED'}</b> by ${esc(row.decided_by_name)}\n${niceDate(row.decided_at)}` +
     (notified ? '' : '\nNote: the user could not be messaged (they may have blocked the bot).');
   await bot.telegram
     .editMessageText(row.approval_chat_id, row.approval_message_id, undefined, cardText(row, user, prev, status), {
@@ -670,7 +678,7 @@ async function handleInput(ctx, pk, kind) {
     const prev = await prevCount(row);
     const sent = await bot.telegram.sendMessage(
       approvalChat,
-      cardText(row, ctx.state.user, prev, 'Status: <b>PENDING</b>'),
+      cardText(row, ctx.state.user, prev, PENDING_STATUS),
       { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...approvalButtons(row.id) }
     );
     unwrap(
@@ -965,7 +973,7 @@ bot.command(
     for (const row of rows) {
       const user = await getUserRow(row.telegram_id);
       const prev = await prevCount(row);
-      await ctx.reply(cardText(row, user, prev, 'Status: <b>PENDING</b>'), {
+      await ctx.reply(cardText(row, user, prev, PENDING_STATUS), {
         parse_mode: 'HTML',
         link_preview_options: { is_disabled: true },
         ...approvalButtons(row.id),
