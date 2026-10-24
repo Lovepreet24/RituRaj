@@ -1306,8 +1306,6 @@ bot.on('text', async (ctx) => {
     if (P[pk] && (kind === 'uid' || kind === 'wallet')) return handleInput(ctx, pk, kind);
   }
   if (state.startsWith('edit:')) return handleEdit(ctx, state.slice(5));
-
-  return ctx.reply('Send /start to begin.');
 });
 
 bot.catch(async (err, ctx) => {
