@@ -342,7 +342,9 @@ function cardText(row, user, prev, statusHtml) {
   return (
     `🆕 <b>NEW SIGN-UP #${row.id}</b>\n\n` +
     `Platform: ${esc(P[row.platform]?.name || row.platform)}\n` +
-    `${kindLabel}: ${esc(row.value)}\n\n` +
+    `${kindLabel}: ${esc(row.value)}\n` +
+    (row.tradingview_id ? `TradingView ID: ${esc(row.tradingview_id)}\n` : '') +
+    `\n` +
     `👤 <b>User Details</b>\n` +
     `• Name: ${esc(user?.first_name || 'User')}\n` +
     `• Username: ${user?.username ? '@' + esc(user.username) : 'none'}\n` +
@@ -509,6 +511,7 @@ bot.help(async (ctx) => {
       '/stats - summary numbers\n' +
       '/pending - pending sign-ups\n' +
       '/export [platform] - download CSV (opens in Excel)\n' +
+      '/varexp - full Excel report (5 sheets)\n' +
       '/find <uid, wallet or telegram id>\n' +
       '/user <telegram id>\n' +
       '/ban <id> and /unban <id>\n' +
@@ -622,8 +625,26 @@ function parseValue(kind, raw) {
   return { ok: false, error: 'That does not look like a valid wallet address. Please send your public address only.' };
 }
 
+const TV_PROMPT = '📊 <b>TradingView ID Required</b>\n\nPlease enter your <b>TradingView ID</b> to complete your registration and receive access to the <b>Private Indicator Suite</b>.';
+
+async function ownerConflict(pk, norm, telegramId) {
+  const owner = unwrap(
+    await db
+      .from('submissions')
+      .select('id, telegram_id')
+      .eq('platform', pk)
+      .eq('value_norm', norm)
+      .in('status', ['pending', 'approved'])
+      .maybeSingle()
+  );
+  return Boolean(owner && owner.telegram_id !== telegramId);
+}
+
+const CONFLICT_MSG =
+  'This UID or wallet is already linked to another account. If you think this is a mistake, please contact the team.';
+
+// Step 1: UID / wallet, then ask for the TradingView ID
 async function handleInput(ctx, pk, kind) {
-  const p = P[pk];
   const raw = ctx.message.text || '';
 
   if (looksLikeSecret(raw)) {
@@ -637,23 +658,48 @@ async function handleInput(ctx, pk, kind) {
   if (!parsed.ok) return ctx.reply(parsed.error);
   if (!allowAttempt(ctx.from.id)) return ctx.reply('Too many attempts. Please try again in 10 minutes.');
 
+  if (!getApproval()) {
+    await alertOwners('A user tried to sign up but no approval channel is set. Use /setapproval.', true);
+    return ctx.reply('Sign-ups are temporarily unavailable. Please try again later.');
+  }
+
+  if (await ownerConflict(pk, parsed.norm, ctx.from.id)) return ctx.reply(CONFLICT_MSG);
+
+  await setState(ctx.from.id, `tv:${pk}:${kind}:${parsed.value}`);
+  await ctx.reply(TV_PROMPT, {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard([[Markup.button.callback('Cancel', `pf:${pk}`)]]),
+  });
+}
+
+function parseTv(raw) {
+  const v = String(raw).trim().replace(/^@/, '');
+  return /^[A-Za-z0-9_]{3,15}$/.test(v) ? v : null;
+}
+
+// Step 2: TradingView ID, then send everything for approval
+async function handleTv(ctx, pk, kind, value) {
+  const p = P[pk];
+  const tv = parseTv(ctx.message.text || '');
+  if (!tv) {
+    return ctx.reply('Please send a valid TradingView ID (3 to 15 letters, numbers or underscore).');
+  }
+
+  const parsed = parseValue(kind, value);
+  if (!parsed.ok) {
+    await setState(ctx.from.id, 'idle');
+    return ctx.reply('Something went wrong. Please send /start and try again.');
+  }
+
   const approvalChat = getApproval();
   if (!approvalChat) {
     await alertOwners('A user tried to sign up but no approval channel is set. Use /setapproval.', true);
     return ctx.reply('Sign-ups are temporarily unavailable. Please try again later.');
   }
 
-  const owner = unwrap(
-    await db
-      .from('submissions')
-      .select('id, telegram_id')
-      .eq('platform', pk)
-      .eq('value_norm', parsed.norm)
-      .in('status', ['pending', 'approved'])
-      .maybeSingle()
-  );
-  if (owner && owner.telegram_id !== ctx.from.id) {
-    return ctx.reply('This UID or wallet is already linked to another account. If you think this is a mistake, please contact the team.');
+  if (await ownerConflict(pk, parsed.norm, ctx.from.id)) {
+    await setState(ctx.from.id, 'idle');
+    return ctx.reply(CONFLICT_MSG);
   }
 
   let row;
@@ -661,7 +707,14 @@ async function handleInput(ctx, pk, kind) {
     row = unwrap(
       await db
         .from('submissions')
-        .insert({ telegram_id: ctx.from.id, platform: pk, kind, value: parsed.value, value_norm: parsed.norm })
+        .insert({
+          telegram_id: ctx.from.id,
+          platform: pk,
+          kind,
+          value: parsed.value,
+          value_norm: parsed.norm,
+          tradingview_id: tv,
+        })
         .select()
         .single()
     );
@@ -994,7 +1047,7 @@ bot.command(
     for (let from = 0; from < 50000; from += 1000) {
       let q = db
         .from('submissions')
-        .select('id, created_at, platform, kind, value, status, telegram_id, decided_by_name, decided_at, bot_users(username, first_name)')
+        .select('id, created_at, platform, kind, value, tradingview_id, status, telegram_id, decided_by_name, decided_at, bot_users(username, first_name)')
         .order('id', { ascending: true })
         .range(from, from + 999);
       if (platform) q = q.eq('platform', platform);
@@ -1004,7 +1057,7 @@ bot.command(
     }
     if (!rows.length) return ctx.reply('There is no data to export yet.');
 
-    const header = ['ID', 'Submitted (UTC)', 'Platform', 'Type', 'Value', 'Status', 'Telegram ID', 'Username', 'Name', 'Decided by', 'Decided at (UTC)'];
+    const header = ['ID', 'Submitted (UTC)', 'Platform', 'Type', 'Value', 'TradingView ID', 'Status', 'Telegram ID', 'Username', 'Name', 'Decided by', 'Decided at (UTC)'];
     const lines = [header.map(csvCell).join(',')];
     for (const r of rows) {
       lines.push(
@@ -1014,6 +1067,7 @@ bot.command(
           P[r.platform]?.name || r.platform,
           r.kind === 'uid' ? 'UID' : 'Wallet',
           r.value,
+          r.tradingview_id || '',
           r.status,
           r.telegram_id,
           r.bot_users?.username ? `@${r.bot_users.username}` : '',
@@ -1146,6 +1200,167 @@ bot.command(
       lines.push(`${p.name}: referral ${getRef(p.key) ? 'set' : 'MISSING'}, VIP ${status}`);
     }
     await ctx.reply(lines.join('\n'));
+  })
+);
+
+/* ---- /varexp: full Excel report (staff only) ---- */
+async function fetchAll(table, select, tweak) {
+  const rows = [];
+  for (let from = 0; from < 100000; from += 1000) {
+    let q = db.from(table).select(select).range(from, from + 999);
+    if (tweak) q = tweak(q);
+    const page = unwrap(await q);
+    rows.push(...page);
+    if (page.length < 1000) break;
+  }
+  return rows;
+}
+
+function styleSheet(ws, color) {
+  const head = ws.getRow(1);
+  head.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  head.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: color } };
+  head.alignment = { vertical: 'middle' };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  if (ws.columnCount > 0 && ws.rowCount > 1) {
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columnCount } };
+  }
+}
+
+bot.command(
+  ['varexp', 'Varexp'],
+  staffOnly(async (ctx) => {
+    let ExcelJS;
+    try {
+      ExcelJS = require('exceljs');
+    } catch {
+      return ctx.reply('The "exceljs" package is not installed. Add it with: npm install exceljs, then redeploy.');
+    }
+
+    const wait = await ctx.reply('Building the Excel report, please wait...').catch(() => null);
+
+    const subs = await fetchAll(
+      'submissions',
+      'id, created_at, platform, kind, value, tradingview_id, status, telegram_id, decided_by_name, decided_at, bot_users(username, first_name)',
+      (q) => q.order('id', { ascending: true })
+    );
+    const users = await fetchAll('bot_users', '*', (q) => q.order('telegram_id', { ascending: true }));
+    const inviteCount = await countRows('invites');
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Vigil Access Bot';
+    wb.created = new Date();
+
+    // 1. Summary
+    const sum = wb.addWorksheet('Summary');
+    sum.columns = [
+      { header: 'Metric', key: 'a', width: 28 },
+      { header: 'Value', key: 'b', width: 22 },
+      { header: '', key: 'c', width: 14 },
+      { header: '', key: 'd', width: 14 },
+      { header: '', key: 'e', width: 14 },
+    ];
+    sum.addRow(['Report generated', stamp(new Date())]);
+    sum.addRow(['Total bot users', users.length]);
+    sum.addRow(['Banned users', users.filter((u) => u.banned).length]);
+    sum.addRow(['Users who blocked the bot', users.filter((u) => u.blocked).length]);
+    sum.addRow(['Total sign-ups', subs.length]);
+    sum.addRow(['Invite links created', inviteCount]);
+    sum.addRow([]);
+    const th = sum.addRow(['Platform', 'Approved', 'Pending', 'Rejected', 'Total']);
+    th.font = { bold: true };
+    th.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+    const tot = { approved: 0, pending: 0, rejected: 0 };
+    for (const p of PLATFORMS) {
+      const mine = subs.filter((r) => r.platform === p.key);
+      const c = {
+        approved: mine.filter((r) => r.status === 'approved').length,
+        pending: mine.filter((r) => r.status === 'pending').length,
+        rejected: mine.filter((r) => r.status === 'rejected').length,
+      };
+      tot.approved += c.approved;
+      tot.pending += c.pending;
+      tot.rejected += c.rejected;
+      sum.addRow([p.name, c.approved, c.pending, c.rejected, mine.length]);
+    }
+    const totalRow = sum.addRow(['TOTAL', tot.approved, tot.pending, tot.rejected, subs.length]);
+    totalRow.font = { bold: true };
+    const h = sum.getRow(1);
+    h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    h.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+
+    // 2-4. Pending, Approved, Rejected
+    const subCols = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Submitted (UTC)', key: 'created', width: 20 },
+      { header: 'Platform', key: 'platform', width: 12 },
+      { header: 'Type', key: 'kind', width: 10 },
+      { header: 'UID / Wallet', key: 'value', width: 46 },
+      { header: 'TradingView ID', key: 'tv', width: 20 },
+      { header: 'Telegram ID', key: 'tg', width: 16 },
+      { header: 'Username', key: 'username', width: 20 },
+      { header: 'Name', key: 'name', width: 20 },
+      { header: 'Decided by', key: 'by', width: 20 },
+      { header: 'Decided at (UTC)', key: 'at', width: 20 },
+    ];
+    const subRow = (r) => ({
+      id: r.id,
+      created: stamp(r.created_at),
+      platform: P[r.platform]?.name || r.platform,
+      kind: r.kind === 'uid' ? 'UID' : 'Wallet',
+      value: r.value,
+      tv: r.tradingview_id || '',
+      tg: String(r.telegram_id),
+      username: r.bot_users?.username ? `@${r.bot_users.username}` : '',
+      name: r.bot_users?.first_name || '',
+      by: r.decided_by_name || '',
+      at: r.decided_at ? stamp(r.decided_at) : '',
+    });
+    const sections = [
+      ['Pending', 'pending', 'FFC55A11'],
+      ['Approved', 'approved', 'FF548235'],
+      ['Rejected', 'rejected', 'FFC00000'],
+    ];
+    for (const [name, status, color] of sections) {
+      const ws = wb.addWorksheet(name);
+      ws.columns = subCols;
+      ws.addRows(subs.filter((r) => r.status === status).map(subRow));
+      styleSheet(ws, color);
+    }
+
+    // 5. Users
+    const wu = wb.addWorksheet('Users');
+    wu.columns = [
+      { header: 'Telegram ID', key: 'id', width: 16 },
+      { header: 'Username', key: 'username', width: 22 },
+      { header: 'Name', key: 'name', width: 22 },
+      { header: 'Banned', key: 'banned', width: 10 },
+      { header: 'Blocked bot', key: 'blocked', width: 13 },
+      { header: 'Sign-ups', key: 'count', width: 10 },
+      { header: 'Last active (UTC)', key: 'updated', width: 20 },
+    ];
+    const perUser = new Map();
+    subs.forEach((r) => perUser.set(r.telegram_id, (perUser.get(r.telegram_id) || 0) + 1));
+    wu.addRows(
+      users.map((u) => ({
+        id: String(u.telegram_id),
+        username: u.username ? `@${u.username}` : '',
+        name: u.first_name || '',
+        banned: u.banned ? 'Yes' : 'No',
+        blocked: u.blocked ? 'Yes' : 'No',
+        count: perUser.get(u.telegram_id) || 0,
+        updated: u.updated_at ? stamp(u.updated_at) : '',
+      }))
+    );
+    styleSheet(wu, 'FF7030A0');
+
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    const date = new Date().toISOString().slice(0, 10);
+    if (wait) await ctx.deleteMessage(wait.message_id).catch(() => {});
+    await ctx.replyWithDocument(
+      { source: buf, filename: `vigil-report-${date}.xlsx` },
+      { caption: `Sheets: Summary, Pending, Approved, Rejected, Users\nSign-ups: ${subs.length} | Users: ${users.length}` }
+    );
   })
 );
 
@@ -1329,6 +1544,12 @@ bot.on('text', async (ctx) => {
   if (state.startsWith('input:')) {
     const [, pk, kind] = state.split(':');
     if (P[pk] && P[pk].kind === kind) return handleInput(ctx, pk, kind);
+    await setState(ctx.from.id, 'idle'); // stale state, reset it
+    return;
+  }
+  if (state.startsWith('tv:')) {
+    const [, pk, kind, ...rest] = state.split(':');
+    if (P[pk] && P[pk].kind === kind && rest.length) return handleTv(ctx, pk, kind, rest.join(':'));
     await setState(ctx.from.id, 'idle'); // stale state, reset it
     return;
   }
