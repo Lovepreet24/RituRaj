@@ -51,7 +51,6 @@ const PLATFORMS = [
   { key: 'txflow', name: 'Txflow', defaultRef: 'https://txflow.com' },
   { key: 'bybit', name: 'Bybit', defaultRef: 'https://www.bybit.com' },
   { key: 'okx', name: 'OKX', defaultRef: 'https://www.okx.com' },
-  { key: 'hyperliquid', name: 'Hyperliquid', defaultRef: 'https://hyperliquid.xyz' },
 ];
 const P = Object.fromEntries(PLATFORMS.map((p) => [p.key, p]));
 
@@ -59,7 +58,7 @@ const DEFAULT_STEPS = 'Complete KYC verification.\nMake a deposit if required.';
 
 const DEFAULT_MSG = {
   welcome:
-    'Welcome to Vigil Access.\n\nGet verified for private VIP access in three steps:\n1. Choose your platform\n2. Sign up with our link and send your UID or wallet address\n3. Once approved, you receive a private one-time invite link\n\nChoose your platform below.',
+    '🛡️ **WELCOME TO VIGIL ACCESS**\n\nUnlock access to **The Vigil VIP Trading Community** and get exclusive market insights, trading indicators, and analysis.\n\n🔑 **How to Get VIP Access**\n\n1️⃣ **Choose Your Platform** from the options below.\n\n2️⃣ **Register Using Our Link** for your selected platform.\n\n3️⃣ Submit your **UID** (or **Wallet Address for TxFlow**) for verification.\n\n4️⃣ **Get Verified** and receive your private VIP invite link.\n\n👇 **Select your preferred platform below to get started.**',
   submitted:
     'Thank you. Your {platform} details have been submitted for review.\n\nYou will receive a message here as soon as a decision is made.',
   approved:
@@ -102,6 +101,7 @@ async function countRows(table, filter) {
 
 const userLabel = (u) => (u?.username ? `@${u.username}` : u?.first_name || String(u?.telegram_id ?? 'unknown'));
 const stamp = (d) => new Date(d).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+const boldify = (t) => esc(t).replace(/\*\*(.+?)\*\*/gs, '<b>$1</b>');
 const render = (t, vars) => String(t).replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`));
 
 let lastAlertAt = 0;
@@ -299,6 +299,27 @@ async function deliverInvite(userId, pk) {
 }
 
 /* =============================================================
+   4b. MIDDLEWARE (must stay above every handler so it runs for /start, buttons and commands too)
+   ============================================================= */
+// Private chats: save the user and ignore banned users
+bot.use(async (ctx, next) => {
+  if (ctx.chat?.type === 'private' && ctx.from) {
+    const u = await upsertUser(ctx.from);
+    if (u.banned && !isStaff(ctx.from.id)) return;
+    ctx.state.user = u;
+  }
+  return next();
+});
+
+// Groups: remove spam links
+bot.use(async (ctx, next) => {
+  if (['group', 'supergroup'].includes(ctx.chat?.type) && (ctx.message || ctx.editedMessage)) {
+    await moderate(ctx).catch((e) => console.error('[mod] error:', e.message));
+  }
+  return next();
+});
+
+/* =============================================================
    5. APPROVAL CARDS
    ============================================================= */
 function approvalButtons(id) {
@@ -428,7 +449,7 @@ function homeKeyboard() {
 async function showHome(ctx) {
   await show(
     ctx,
-    `${esc(getMsg('welcome'))}\n\n<i>Trading involves risk. Nothing here is financial advice.</i>`,
+    `${boldify(getMsg('welcome'))}\n\n<i>Trading involves risk. Nothing here is financial advice.</i>`,
     homeKeyboard()
   );
 }
@@ -749,7 +770,7 @@ bot.action(
     if (arg === 'ms') {
       const rows = Object.keys(DEFAULT_MSG).map((k) => [Markup.button.callback(MSG_LABELS[k], `se:msg:${k}`)]);
       rows.push([back('st:home')]);
-      return show(ctx, '<b>Messages</b>\n\nChoose a message to edit. You can use {platform} and {minutes} inside messages.', Markup.inlineKeyboard(rows));
+      return show(ctx, '<b>Messages</b>\n\nChoose a message to edit. You can use {platform} and {minutes} inside messages. In the welcome message, put **text** between double stars to make it bold.', Markup.inlineKeyboard(rows));
     }
 
     if (arg === 'ln') {
@@ -1275,26 +1296,8 @@ setInterval(() => {
 }, 60 * 60_000).unref();
 
 /* =============================================================
-   10. MIDDLEWARE, TEXT HANDLER, STARTUP
+   10. TEXT HANDLER, STARTUP
    ============================================================= */
-// Private chats: save the user and ignore banned users
-bot.use(async (ctx, next) => {
-  if (ctx.chat?.type === 'private' && ctx.from) {
-    const u = await upsertUser(ctx.from);
-    if (u.banned && !isStaff(ctx.from.id)) return;
-    ctx.state.user = u;
-  }
-  return next();
-});
-
-// Groups: remove spam links
-bot.use(async (ctx, next) => {
-  if (['group', 'supergroup'].includes(ctx.chat?.type) && (ctx.message || ctx.editedMessage)) {
-    await moderate(ctx).catch((e) => console.error('[mod] error:', e.message));
-  }
-  return next();
-});
-
 bot.on('text', async (ctx) => {
   if (ctx.chat.type !== 'private') return;
   if (ctx.message.text.startsWith('/')) return;
