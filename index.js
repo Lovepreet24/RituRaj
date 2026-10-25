@@ -49,7 +49,7 @@ const MOD_CHAT_IDS = env('MODERATED_CHAT_IDS')
 // kind = what the user submits on that platform: 'uid' or 'wallet'
 const PLATFORMS = [
   { key: 'blofin', name: 'BloFin', kind: 'uid', defaultRef: 'https://partner.blofin.com/d/THEVIGIL20' },
-  { key: 'txflow', name: 'Txflow', kind: 'wallet', defaultRef: 'https://app.txflow.com/r/TXVIGIL' },
+  { key: 'txflow', name: 'TxFlow', kind: 'wallet', defaultRef: 'https://app.txflow.com/r/TXVIGIL' },
   { key: 'bybit', name: 'Bybit', kind: 'uid', defaultRef: 'https://partner.bybit.com/b/thevigil' },
   { key: 'okx', name: 'OKX', kind: 'uid', defaultRef: 'https://www.okx.com' },
 ];
@@ -484,7 +484,7 @@ function platformText(pk) {
     );
   }
 
-  // Txflow: wallet address
+  // TxFlow: wallet address
   const title = 'TxFlow';
   const link = ref
     ? `<a href="${esc(ref)}"><b>Sign Up on ${title}</b></a>`
@@ -493,7 +493,8 @@ function platformText(pk) {
     `🔷 <b>${title}</b>\n\n` +
     `<b>Step 1:</b> Register using our referral link.\n\n` +
     `🔗 ${link}\n\n` +
-    `<b>Step 2:</b> Submit your <b>wallet address</b> using the button below.`
+    `<b>Step 2:</b> Send your <b>wallet address</b> below.\n\n` +
+    `<i>Never send a private key or seed phrase.</i>`
   );
 }
 
@@ -545,6 +546,7 @@ bot.action('home', async (ctx) => {
   await showHome(ctx);
 });
 
+// Platform page: no "Enter UID" button. The user can send the UID / wallet address directly.
 bot.action(/^pf:(\w+)$/, async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   if (ctx.chat?.type !== 'private') return;
@@ -555,16 +557,7 @@ bot.action(/^pf:(\w+)$/, async (ctx) => {
 
   const approved = await findSubmission(ctx.from.id, pk, ['approved']);
   if (approved) {
-    const vip = getVip(pk);
-    if (vip && (await isChannelMember(vip, ctx.from.id))) return show(ctx, memberText(p));
-    return show(
-      ctx,
-      `You are already approved for <b>${esc(p.name)}</b>.\n\nIf you did not join yet or your link expired, you can request a new one.`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback('Send me a new invite link', `lk:${pk}`)],
-        [Markup.button.callback('Back', 'home')],
-      ])
-    );
+    return show(ctx, memberText(p));
   }
 
   const pending = await findSubmission(ctx.from.id, pk, ['pending']);
@@ -576,13 +569,9 @@ bot.action(/^pf:(\w+)$/, async (ctx) => {
     );
   }
 
-  // UID platforms show only "Enter UID"; Txflow shows only "Enter wallet address"
-  const enterButton =
-    p.kind === 'uid'
-      ? Markup.button.callback('Enter UID', `in:${pk}:uid`)
-      : Markup.button.callback('Enter wallet address', `in:${pk}:wallet`);
-
-  await show(ctx, platformText(pk), Markup.inlineKeyboard([[enterButton], [Markup.button.callback('Back', 'home')]]));
+  // Ready to receive the UID / wallet address directly
+  await setState(ctx.from.id, `input:${pk}:${p.kind}`);
+  await show(ctx, platformText(pk), Markup.inlineKeyboard([[Markup.button.callback('Back', 'home')]]));
 });
 
 bot.action(/^lk:(\w+)$/, async (ctx) => {
@@ -601,6 +590,7 @@ bot.action(/^in:(\w+):(uid|wallet)$/, async (ctx) => {
   const [, pk, kind] = ctx.match;
   const p = P[pk];
   if (!p || p.kind !== kind) return; // each platform accepts only its own type
+  if (await alreadyRequested(ctx, pk)) return;
   await setState(ctx.from.id, `input:${pk}:${kind}`);
   const prompt =
     kind === 'uid'
@@ -632,23 +622,58 @@ function parseValue(kind, raw) {
 const TV_PROMPT = '📊 <b>TradingView ID Required</b>\n\nPlease enter your <b>TradingView ID</b> to complete your registration and receive access to the <b>Private Indicator Suite</b>.';
 
 async function ownerConflict(pk, norm, telegramId) {
-  const owner = unwrap(
+  const rows = unwrap(
     await db
       .from('submissions')
       .select('id, telegram_id')
       .eq('platform', pk)
       .eq('value_norm', norm)
       .in('status', ['pending', 'approved'])
-      .maybeSingle()
+      .limit(10)
   );
-  return Boolean(owner && owner.telegram_id !== telegramId);
+  return rows.some((r) => Number(r.telegram_id) !== Number(telegramId));
 }
+
+// Same TradingView ID on a different Telegram account (pending or approved) is a duplicate
+async function tvConflict(tv, telegramId) {
+  const pattern = tv.replace(/[\\%_]/g, '\\$&'); // "_" is a wildcard in ILIKE, so escape it
+  const rows = unwrap(
+    await db
+      .from('submissions')
+      .select('id, telegram_id')
+      .ilike('tradingview_id', pattern)
+      .in('status', ['pending', 'approved'])
+      .limit(10)
+  );
+  return rows.some((r) => Number(r.telegram_id) !== Number(telegramId));
+}
+
+// One live (pending or approved) request per person and platform
+async function alreadyRequested(ctx, pk) {
+  const existing = await findSubmission(ctx.from.id, pk, ['pending', 'approved']);
+  if (!existing) return false;
+  await setState(ctx.from.id, 'idle');
+  const p = P[pk];
+  const name = esc(p.name);
+  await show(
+    ctx,
+    existing.status === 'approved'
+      ? memberText(p)
+      : `Your <b>${name}</b> request is already under review. You will get a message here as soon as there is a decision.`,
+    Markup.inlineKeyboard([[Markup.button.callback('Back to menu', 'home')]])
+  );
+  return true;
+}
+
+const TV_CONFLICT_MSG =
+  'This TradingView ID is already linked to another account. If you think this is a mistake, please contact the team.';
 
 const CONFLICT_MSG =
   'This UID or wallet is already linked to another account. If you think this is a mistake, please contact the team.';
 
 // Step 1: UID / wallet, then ask for the TradingView ID
 async function handleInput(ctx, pk, kind) {
+  if (await alreadyRequested(ctx, pk)) return;
   const raw = ctx.message.text || '';
 
   if (looksLikeSecret(raw)) {
@@ -682,12 +707,25 @@ function parseTv(raw) {
 }
 
 // Step 2: TradingView ID, then send everything for approval
+const tvLocks = new Set();
 async function handleTv(ctx, pk, kind, value) {
+  if (tvLocks.has(ctx.from.id)) return; // a second message while the first is still being saved
+  tvLocks.add(ctx.from.id);
+  try {
+    await handleTvInner(ctx, pk, kind, value);
+  } finally {
+    tvLocks.delete(ctx.from.id);
+  }
+}
+
+async function handleTvInner(ctx, pk, kind, value) {
+  if (await alreadyRequested(ctx, pk)) return;
   const p = P[pk];
   const tv = parseTv(ctx.message.text || '');
   if (!tv) {
     return ctx.reply('Please send a valid TradingView ID (3 to 15 letters, numbers or underscore).');
   }
+  if (await tvConflict(tv, ctx.from.id)) return ctx.reply(TV_CONFLICT_MSG);
 
   const parsed = parseValue(kind, value);
   if (!parsed.ok) {
@@ -723,7 +761,14 @@ async function handleTv(ctx, pk, kind, value) {
         .single()
     );
   } catch (e) {
-    if (e.code === '23505') return ctx.reply(`You already have a request for ${p.name}.`);
+    if (e.code === '23505') {
+      // The database refused a duplicate that slipped past the checks above
+      if (await ownerConflict(pk, parsed.norm, ctx.from.id)) {
+        await setState(ctx.from.id, 'idle');
+        return ctx.reply(CONFLICT_MSG);
+      }
+      return ctx.reply(`You already have a request for ${p.name}.`);
+    }
     throw e;
   }
 
