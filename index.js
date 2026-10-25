@@ -64,6 +64,16 @@ const DEFAULT_MSG = {
     '✅ **Request Submitted Successfully!**\n\nYour request is now under review. Once approved, you’ll receive a link to join **The Vigil VIP Community**.',
   approved: "🎉 **You're Approved!**\nTap below to join.\n🔗 {link}",
   rejected: '❌ **Request Declined**\nFor assistance, contact our support team:\n@vigil_intern',
+  review:
+    '⏳ **Request Under Review**\n\nYour {platform} request is under review. Once approved, you’ll receive an invite link to join The Vigil VIP Community.',
+  member:
+    '✅ **You’re Already a Member!**\n\nYou’re already approved for {platform} and a member of The Vigil VIP Community.\n\nYou’re all set! 🛡️',
+  tv_prompt:
+    '📊 **TradingView ID Required**\n\nPlease enter your **TradingView ID** to complete your registration and receive access to the **Private Indicator Suite**.',
+  tv_conflict:
+    '⚠️ **TradingView ID Already in Use**\n\nIf you believe this is a mistake, please contact @Vigil_intern for assistance.',
+  conflict:
+    'This UID or wallet is already linked to another account. If you think this is a mistake, please contact the team.',
 };
 
 const MSG_LABELS = {
@@ -71,6 +81,11 @@ const MSG_LABELS = {
   submitted: 'Submitted message',
   approved: 'Approved message',
   rejected: 'Rejected message',
+  review: 'Under review message',
+  member: 'Already a member message',
+  tv_prompt: 'TradingView ID request message',
+  tv_conflict: 'TradingView ID already in use message',
+  conflict: 'UID / wallet already in use message',
 };
 
 /* =============================================================
@@ -106,7 +121,7 @@ const niceDate = (d) => {
   const p = (n) => String(n).padStart(2, '0');
   return `${x.getUTCDate()} ${mon} ${x.getUTCFullYear()}, ${p(x.getUTCHours())}:${p(x.getUTCMinutes())} UTC`;
 };
-const boldify = (t) => esc(t).replace(/\*\*(.+?)\*\*/gs, '<b>$1</b>');
+const boldify = (t) => esc(t).replace(/\*\*(.+?)\*\*/gs, '<b>$1</b>').replace(/__(.+?)__/gs, '<i>$1</i>');
 const render = (t, vars) => String(t).replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`));
 
 let lastAlertAt = 0;
@@ -464,37 +479,26 @@ async function showHome(ctx) {
   await show(ctx, boldify(getMsg('welcome')), homeKeyboard());
 }
 
-const memberText = (p) =>
-  `✅ <b>You’re Already a Member!</b>\n\nYou’re already approved for ${esc(p.name)} and a member of The Vigil VIP Community.\n\nYou’re all set! 🛡️`;
+const memberText = (p) => boldify(getMsg('member', { platform: p.name }));
+
+const reviewText = (p) => boldify(getMsg('review', { platform: p.name }));
+
+function defaultPageText(pk) {
+  const p = P[pk];
+  if (p.kind === 'uid') {
+    return `🔷 **Step 1:** Create your account using our referral link.\n\n🔗 {link}\n\n🔷 **Step 2:** Enter your ${p.name} UID below.`;
+  }
+  return `**Step 1:** Register using our referral link.\n\n🔗 {link}\n\n**Step 2:** Send your **wallet address** below.\n\n__Never send a private key or seed phrase.__`;
+}
 
 function platformText(pk) {
   const p = P[pk];
   const ref = getRef(pk);
-
-  // BloFin, Bybit, OKX: short page, UID only
-  if (p.kind === 'uid') {
-    const link = ref
-      ? `<a href="${esc(ref)}"><b>Sign Up on ${esc(p.name)}</b></a>`
-      : 'The sign-up link will be shared soon.';
-    return (
-      `🔷 <b>Step 1:</b> Create your account using our referral link.\n\n` +
-      `🔗 ${link}\n\n` +
-      `🔷 <b>Step 2:</b> Enter your ${esc(p.name)} UID below.`
-    );
-  }
-
-  // TxFlow: wallet address
-  const title = 'TxFlow';
-  const link = ref
-    ? `<a href="${esc(ref)}"><b>Sign Up on ${title}</b></a>`
+  const linkHtml = ref
+    ? `<a href="${esc(ref)}"><b>Sign Up on ${esc(p.name)}</b></a>`
     : 'The sign-up link will be shared soon.';
-  return (
-    `🔷 <b>${title}</b>\n\n` +
-    `<b>Step 1:</b> Register using our referral link.\n\n` +
-    `🔗 ${link}\n\n` +
-    `<b>Step 2:</b> Send your <b>wallet address</b> below.\n\n` +
-    `<i>Never send a private key or seed phrase.</i>`
-  );
+  const text = getSetting(`page:${pk}`) || defaultPageText(pk);
+  return boldify(text).replace(/\{link\}/g, () => linkHtml);
 }
 
 bot.start(async (ctx) => {
@@ -561,11 +565,7 @@ bot.action(/^pf:(\w+)$/, async (ctx) => {
 
   const pending = await findSubmission(ctx.from.id, pk, ['pending']);
   if (pending) {
-    return show(
-      ctx,
-      `Your <b>${esc(p.name)}</b> request is under review. You will get a message here as soon as there is a decision.`,
-      Markup.inlineKeyboard([[Markup.button.callback('Back', 'home')]])
-    );
+    return show(ctx, reviewText(p), Markup.inlineKeyboard([[Markup.button.callback('Back', 'home')]]));
   }
 
   // Ready to receive the UID / wallet address directly
@@ -618,8 +618,6 @@ function parseValue(kind, raw) {
   return { ok: false, error: 'That does not look like a valid wallet address. Please send your public address only.' };
 }
 
-const TV_PROMPT = '📊 <b>TradingView ID Required</b>\n\nPlease enter your <b>TradingView ID</b> to complete your registration and receive access to the <b>Private Indicator Suite</b>.';
-
 async function ownerConflict(pk, norm, telegramId) {
   const rows = unwrap(
     await db
@@ -658,17 +656,11 @@ async function alreadyRequested(ctx, pk) {
     ctx,
     existing.status === 'approved'
       ? memberText(p)
-      : `Your <b>${name}</b> request is already under review. You will get a message here as soon as there is a decision.`,
+      : reviewText(p),
     Markup.inlineKeyboard([[Markup.button.callback(existing.status === 'approved' ? 'Back' : 'Back to menu', 'home')]])
   );
   return true;
 }
-
-const TV_CONFLICT_MSG =
-  '⚠️ <b>TradingView ID Already in Use</b>\n\nIf you believe this is a mistake, please contact @Vigil_intern for assistance.';
-
-const CONFLICT_MSG =
-  'This UID or wallet is already linked to another account. If you think this is a mistake, please contact the team.';
 
 // Step 1: UID / wallet, then ask for the TradingView ID
 async function handleInput(ctx, pk, kind) {
@@ -691,10 +683,10 @@ async function handleInput(ctx, pk, kind) {
     return ctx.reply('Sign-ups are temporarily unavailable. Please try again later.');
   }
 
-  if (await ownerConflict(pk, parsed.norm, ctx.from.id)) return ctx.reply(CONFLICT_MSG);
+  if (await ownerConflict(pk, parsed.norm, ctx.from.id)) return ctx.reply(boldify(getMsg('conflict')), { parse_mode: 'HTML' });
 
   await setState(ctx.from.id, `tv:${pk}:${kind}:${parsed.value}`);
-  await ctx.reply(TV_PROMPT, {
+  await ctx.reply(boldify(getMsg('tv_prompt')), {
     parse_mode: 'HTML',
     ...Markup.inlineKeyboard([[Markup.button.callback('Back', `pf:${pk}`)]]),
   });
@@ -724,7 +716,7 @@ async function handleTvInner(ctx, pk, kind, value) {
   if (!tv) {
     return ctx.reply('Please send a valid TradingView ID (3 to 15 letters, numbers or underscore).');
   }
-  if (await tvConflict(tv, ctx.from.id)) return ctx.reply(TV_CONFLICT_MSG, { parse_mode: 'HTML' });
+  if (await tvConflict(tv, ctx.from.id)) return ctx.reply(boldify(getMsg('tv_conflict')), { parse_mode: 'HTML' });
 
   const parsed = parseValue(kind, value);
   if (!parsed.ok) {
@@ -740,7 +732,7 @@ async function handleTvInner(ctx, pk, kind, value) {
 
   if (await ownerConflict(pk, parsed.norm, ctx.from.id)) {
     await setState(ctx.from.id, 'idle');
-    return ctx.reply(CONFLICT_MSG);
+    return ctx.reply(boldify(getMsg('conflict')), { parse_mode: 'HTML' });
   }
 
   let row;
@@ -764,7 +756,7 @@ async function handleTvInner(ctx, pk, kind, value) {
       // The database refused a duplicate that slipped past the checks above
       if (await ownerConflict(pk, parsed.norm, ctx.from.id)) {
         await setState(ctx.from.id, 'idle');
-        return ctx.reply(CONFLICT_MSG);
+        return ctx.reply(boldify(getMsg('conflict')), { parse_mode: 'HTML' });
       }
       return ctx.reply(`You already have a request for ${p.name}.`);
     }
@@ -819,6 +811,9 @@ function settingMeta(key) {
   if (type === 'steps' && P[part]) {
     return { label: `${P[part].name} sign-up steps (one step per line)`, check: (v) => (v.length <= 800 ? null : 'Maximum 800 characters') };
   }
+  if (type === 'page' && P[part]) {
+    return { label: `${P[part].name} platform page text (put {link} where the sign-up link should appear)`, check: (v) => (v.length <= 1000 ? null : 'Maximum 1000 characters') };
+  }
   if (type === 'msg' && DEFAULT_MSG[part]) {
     return { label: MSG_LABELS[part], check: (v) => (v.length <= 1000 ? null : 'Maximum 1000 characters') };
   }
@@ -833,6 +828,7 @@ function currentValue(key) {
   if (type === 'ref') return getRef(part) || '(empty)';
   if (type === 'vip') return getVip(part) || '(not set)';
   if (type === 'steps') return getSteps(part);
+  if (type === 'page') return getSetting(`page:${part}`) || defaultPageText(part);
   if (type === 'msg') return getSetting(`msg:${part}`, DEFAULT_MSG[part]);
   if (key === 'link_ttl_min') return String(getTtl());
   return '';
@@ -880,11 +876,11 @@ bot.action(
         `<b>${esc(p.name)} settings</b>\n\n` +
           `Referral link:\n<code>${esc(getRef(pk) || '(empty)')}</code>\n\n` +
           `VIP channel ID: <code>${esc(vip || 'not set')}</code>\n\n` +
-          `Steps:\n${esc(getSteps(pk))}`,
+          `Page text: ${getSetting(`page:${pk}`) ? 'custom' : 'default'}`,
         Markup.inlineKeyboard([
           [Markup.button.callback('Edit referral link', `se:ref:${pk}`)],
           [Markup.button.callback('Edit VIP channel', `se:vip:${pk}`)],
-          [Markup.button.callback('Edit steps', `se:steps:${pk}`)],
+          [Markup.button.callback('Edit page text', `se:page:${pk}`)],
           [back('st:pl')],
         ])
       );
@@ -893,7 +889,7 @@ bot.action(
     if (arg === 'ms') {
       const rows = Object.keys(DEFAULT_MSG).map((k) => [Markup.button.callback(MSG_LABELS[k], `se:msg:${k}`)]);
       rows.push([back('st:home')]);
-      return show(ctx, '<b>Messages</b>\n\nChoose a message to edit. You can use {platform}, {item} (submitted message), {link} and {minutes} (approved message) inside messages. Put **text** between double stars to make it bold.', Markup.inlineKeyboard(rows));
+      return show(ctx, '<b>Messages</b>\n\nChoose a message to edit. You can use {platform} in any message, {item} in the submitted message, and {link} and {minutes} in the approved message. Put **text** between double stars to make it bold, and __text__ between double underscores for italic.', Markup.inlineKeyboard(rows));
     }
 
     if (arg === 'ln') {
