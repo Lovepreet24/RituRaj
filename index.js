@@ -247,7 +247,10 @@ async function deliverInvite(userId, pk) {
     if (!channelId) throw new Error(`No VIP channel is set for ${p.name}`);
 
     if (await isChannelMember(channelId, userId)) {
-      await bot.telegram.sendMessage(userId, memberText(p), { parse_mode: 'HTML' });
+      await bot.telegram.sendMessage(userId, memberText(p), {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([[Markup.button.callback('Back', 'home')]]),
+      });
       return true;
     }
 
@@ -458,11 +461,7 @@ function homeKeyboard() {
 }
 
 async function showHome(ctx) {
-  await show(
-    ctx,
-    `${boldify(getMsg('welcome'))}\n\n<i>Trading involves risk. Nothing here is financial advice.</i>`,
-    homeKeyboard()
-  );
+  await show(ctx, boldify(getMsg('welcome')), homeKeyboard());
 }
 
 const memberText = (p) =>
@@ -557,7 +556,7 @@ bot.action(/^pf:(\w+)$/, async (ctx) => {
 
   const approved = await findSubmission(ctx.from.id, pk, ['approved']);
   if (approved) {
-    return show(ctx, memberText(p));
+    return show(ctx, memberText(p), Markup.inlineKeyboard([[Markup.button.callback('Back', 'home')]]));
   }
 
   const pending = await findSubmission(ctx.from.id, pk, ['pending']);
@@ -660,13 +659,13 @@ async function alreadyRequested(ctx, pk) {
     existing.status === 'approved'
       ? memberText(p)
       : `Your <b>${name}</b> request is already under review. You will get a message here as soon as there is a decision.`,
-    Markup.inlineKeyboard([[Markup.button.callback('Back to menu', 'home')]])
+    Markup.inlineKeyboard([[Markup.button.callback(existing.status === 'approved' ? 'Back' : 'Back to menu', 'home')]])
   );
   return true;
 }
 
 const TV_CONFLICT_MSG =
-  'This TradingView ID is already linked to another account. If you think this is a mistake, please contact the team.';
+  '⚠️ <b>TradingView ID Already in Use</b>\n\nIf you believe this is a mistake, please contact @Vigil_intern for assistance.';
 
 const CONFLICT_MSG =
   'This UID or wallet is already linked to another account. If you think this is a mistake, please contact the team.';
@@ -725,7 +724,7 @@ async function handleTvInner(ctx, pk, kind, value) {
   if (!tv) {
     return ctx.reply('Please send a valid TradingView ID (3 to 15 letters, numbers or underscore).');
   }
-  if (await tvConflict(tv, ctx.from.id)) return ctx.reply(TV_CONFLICT_MSG);
+  if (await tvConflict(tv, ctx.from.id)) return ctx.reply(TV_CONFLICT_MSG, { parse_mode: 'HTML' });
 
   const parsed = parseValue(kind, value);
   if (!parsed.ok) {
