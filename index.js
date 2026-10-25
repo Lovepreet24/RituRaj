@@ -59,9 +59,9 @@ const DEFAULT_STEPS = 'Complete KYC verification.\nMake a deposit if required.';
 
 const DEFAULT_MSG = {
   welcome:
-    '🛡️ **WELCOME TO VIGIL ACCESS**\n\nUnlock access to **The Vigil VIP Trading Community** and get exclusive market insights, trading indicators, and analysis.\n\n🔑 **How to Get VIP Access**\n\n1️⃣ **Choose Your Platform** from the options below.\n\n2️⃣ **Register Using Our Link** for your selected platform.\n\n3️⃣ Submit your **UID** (or **Wallet Address for TxFlow**) for verification.\n\n4️⃣ **Get Verified** and receive your private VIP invite link.\n\n👇 **Select your preferred platform below to get started.**',
+    '🛡️ **WELCOME TO THE VIGIL**\n\nUnlock access to **The Vigil VIP Trading Community** and get exclusive market insights, trading indicators, and analysis.\n\n🔑 **How to Get VIP Access**\n\n1️⃣ **Choose Your Platform** from the options below.\n\n2️⃣ **Register Using Our Link** for your selected platform.\n\n3️⃣ Submit your **UID** (or **Wallet Address for TxFlow**) for verification.\n\n4️⃣ **Get Verified** and receive your VIP invite link.\n\n👇 **Select your preferred platform below to get started.**',
   submitted:
-    "✅ **{item} Submitted Successfully!**\nYour {item} is under review. We'll notify you once it's approved.",
+    '✅ **Request Submitted Successfully!**\n\nYour request is now under review. Once approved, you’ll receive a link to join **The Vigil VIP Community**.',
   approved: "🎉 **You're Approved!**\nTap below to join.\n🔗 {link}",
   rejected: '❌ **Request Declined**\nFor assistance, contact our support team:\n@vigil_intern',
 };
@@ -247,7 +247,7 @@ async function deliverInvite(userId, pk) {
     if (!channelId) throw new Error(`No VIP channel is set for ${p.name}`);
 
     if (await isChannelMember(channelId, userId)) {
-      await bot.telegram.sendMessage(userId, `You are already in the ${p.name} VIP channel.`);
+      await bot.telegram.sendMessage(userId, memberText(p), { parse_mode: 'HTML' });
       return true;
     }
 
@@ -342,13 +342,13 @@ function cardText(row, user, prev, statusHtml) {
   return (
     `🆕 <b>NEW SIGN-UP #${row.id}</b>\n\n` +
     `Platform: ${esc(P[row.platform]?.name || row.platform)}\n` +
-    `${kindLabel}: ${esc(row.value)}\n` +
-    (row.tradingview_id ? `TradingView ID: ${esc(row.tradingview_id)}\n` : '') +
+    `${kindLabel}: <code>${esc(row.value)}</code>\n` +
+    (row.tradingview_id ? `TradingView ID: <code>${esc(row.tradingview_id)}</code>\n` : '') +
     `\n` +
     `👤 <b>User Details</b>\n` +
     `• Name: ${esc(user?.first_name || 'User')}\n` +
     `• Username: ${user?.username ? '@' + esc(user.username) : 'none'}\n` +
-    `• Telegram ID: ${row.telegram_id}\n\n` +
+    `• Telegram ID: <code>${row.telegram_id}</code>\n\n` +
     `📅 <b>Submitted:</b> ${niceDate(row.created_at)}\n` +
     `🔄 <b>Previous Requests:</b> ${prev}\n\n` +
     statusHtml
@@ -465,6 +465,9 @@ async function showHome(ctx) {
   );
 }
 
+const memberText = (p) =>
+  `✅ <b>You’re Already a Member!</b>\n\nYou’re already approved for ${esc(p.name)} and a member of The Vigil VIP Community.\n\nYou’re all set! 🛡️`;
+
 function platformText(pk) {
   const p = P[pk];
   const ref = getRef(pk);
@@ -475,10 +478,9 @@ function platformText(pk) {
       ? `<a href="${esc(ref)}"><b>Sign Up on ${esc(p.name)}</b></a>`
       : 'The sign-up link will be shared soon.';
     return (
-      `🔷 <b>${esc(p.name)}</b>\n\n` +
-      `<b>Step 1:</b> Create your account using our referral link.\n\n` +
+      `🔷 <b>Step 1:</b> Create your account using our referral link.\n\n` +
       `🔗 ${link}\n\n` +
-      `<b>Step 2:</b> Submit your <b>${esc(p.name)} UID</b> using the button below.`
+      `🔷 <b>Step 2:</b> Enter your ${esc(p.name)} UID below.`
     );
   }
 
@@ -553,6 +555,8 @@ bot.action(/^pf:(\w+)$/, async (ctx) => {
 
   const approved = await findSubmission(ctx.from.id, pk, ['approved']);
   if (approved) {
+    const vip = getVip(pk);
+    if (vip && (await isChannelMember(vip, ctx.from.id))) return show(ctx, memberText(p));
     return show(
       ctx,
       `You are already approved for <b>${esc(p.name)}</b>.\n\nIf you did not join yet or your link expired, you can request a new one.`,
@@ -602,7 +606,7 @@ bot.action(/^in:(\w+):(uid|wallet)$/, async (ctx) => {
     kind === 'uid'
       ? `Send your <b>${esc(p.name)} UID</b> (numbers only).`
       : `Send your <b>public wallet address</b> for ${esc(p.name)}.\n\n<i>Never send a private key or seed phrase.</i>`;
-  await show(ctx, prompt, Markup.inlineKeyboard([[Markup.button.callback('Cancel', `pf:${pk}`)]]));
+  await show(ctx, prompt, Markup.inlineKeyboard([[Markup.button.callback('Back', `pf:${pk}`)]]));
 });
 
 function looksLikeSecret(t) {
@@ -668,7 +672,7 @@ async function handleInput(ctx, pk, kind) {
   await setState(ctx.from.id, `tv:${pk}:${kind}:${parsed.value}`);
   await ctx.reply(TV_PROMPT, {
     parse_mode: 'HTML',
-    ...Markup.inlineKeyboard([[Markup.button.callback('Cancel', `pf:${pk}`)]]),
+    ...Markup.inlineKeyboard([[Markup.button.callback('Back', `pf:${pk}`)]]),
   });
 }
 
