@@ -1585,6 +1585,13 @@ async function moderate(ctx) {
   if (sent) setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, sent.message_id).catch(() => {}), 15_000);
 }
 
+// Groups: delete "X joined" / "X left" service messages (bot needs admin + Delete messages permission)
+bot.on(['new_chat_members', 'left_chat_member'], async (ctx) => {
+  if (!['group', 'supergroup'].includes(ctx.chat?.type)) return;
+  if (MOD_CHAT_IDS.length && !MOD_CHAT_IDS.includes(String(ctx.chat.id))) return;
+  await ctx.deleteMessage().catch((e) => console.error('[service-msg] delete failed:', e.message));
+});
+
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of strikes) if (now - v.t > 24 * 3600 * 1000) strikes.delete(k);
